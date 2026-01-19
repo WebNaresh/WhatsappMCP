@@ -2,82 +2,87 @@
 
 ## 1. Overview
 
-This document defines the requirements for a **WhatsApp MCP (Model Context Protocol) Server**. The primary goal is to **automate the creation and management of WhatsApp Templates** on Meta via AI conversation, eliminating manual dashboard work.
-
-## 2. Problem Statement
-
-- Creating WhatsApp templates manually in Meta Dashboard is tedious and error-prone
-- Multiple apps (Practice Stacks, Abhyasika, Sparsh Glow, etc.) each need different templates
-- AI can generate template specs but user still has to copy/paste to dashboard manually
-- No validation feedback loop between AI and Meta API
-
-## 3. Solution: WhatsApp Management MCP Server
-
-A local MCP server that exposes tools to programmatically manage templates across multiple WhatsApp Business Accounts.
+A **WhatsApp MCP Server** that enables AI to create and manage WhatsApp Templates on Meta via conversation. No manual dashboard work required.
 
 ---
 
-## 4. Architecture
+## 2. Core Principles
 
-### 4.1 Security Model
+| Principle          | Description                                              |
+| ------------------ | -------------------------------------------------------- |
+| **No Storage**     | We don't store templates. All data lives on Meta.        |
+| **One at a Time**  | Create/delete one template per call. AI loops if needed. |
+| **Direct API**     | All operations go directly to Meta Graph API.            |
+| **Token in Env**   | Access token stays in `.env`, never in conversation.     |
+| **WABA from User** | User provides WABA ID per request.                       |
 
-| Item           | Storage               | Exposed in Chat?     |
-| -------------- | --------------------- | -------------------- |
-| Access Token   | `.env` file           | ❌ Never             |
-| WABA ID        | User provides         | ✅ Safe (not secret) |
-| Template specs | Markdown/conversation | ✅ AI reads          |
+---
 
-### 4.2 Server Structure
+## 3. Security Model
 
-```
-WhatsappMCP/
-├── src/
-│   ├── server.ts          # MCP server entry point
-│   ├── tools/
-│   │   ├── create.ts      # create_whatsapp_template
-│   │   ├── list.ts        # list_whatsapp_templates
-│   │   └── delete.ts      # delete_whatsapp_template
-│   ├── schemas/
-│   │   └── template.ts    # Zod validation schemas
-│   └── lib/
-│       └── meta-api.ts    # Meta Graph API client
-├── .env                   # WHATSAPP_ACCESS_TOKEN (secret)
-├── package.json
-└── tsconfig.json
-```
+| Item         | Location      | In Conversation?     |
+| ------------ | ------------- | -------------------- |
+| Access Token | `.env` file   | ❌ Never             |
+| WABA ID      | User provides | ✅ Safe (not secret) |
 
-### 4.3 Multi-App Support
+---
 
-```
-One Business Portfolio (Novibyte Innovations)
-├── Practice Stacks    → WABA ID: 278469610073775
-├── Abhyasika          → WABA ID: 168563435816817
-├── Sparsh Glow        → WABA ID: xxxxxxxxxx
-└── Test Account       → WABA ID: xxxxxxxxxx
+## 4. MCP Tools Specification
 
-All share ONE access token in .env
-User specifies WABA ID per request
+### Tool 1: `get_template_format`
+
+**Purpose:** AI calls this first to learn the correct template format.
+
+**Input:** None (or optional category filter)
+
+**Output:**
+
+```typescript
+{
+  format: {
+    name: "lowercase_with_underscores (max 512 chars)",
+    category: "UTILITY | MARKETING | AUTHENTICATION",
+    language: "en (default)",
+    components: "array of HEADER, BODY, FOOTER, BUTTONS"
+  },
+  example: {
+    name: "order_confirmation",
+    category: "UTILITY",
+    language: "en",
+    components: [
+      {
+        type: "BODY",
+        text: "Hi {{1}}! Your order {{2}} is confirmed.",
+        example: { body_text: [["John", "ORD-12345"]] }
+      }
+    ]
+  },
+  rules: [
+    "name: lowercase, underscores only",
+    "variables: {{1}}, {{2}}, max 10",
+    "AUTHENTICATION: max 1 variable",
+    "example values required for approval"
+  ]
+}
 ```
 
 ---
 
-## 5. MCP Tools Specification
+### Tool 2: `create_whatsapp_template`
 
-### Tool 1: `create_whatsapp_template`
-
-Creates a single template on Meta.
+**Purpose:** Create ONE template on Meta.
 
 **Input Schema (Zod):**
 
 ```typescript
 const CreateTemplateInput = z.object({
-  waba_id: z.string().regex(/^\d+$/, "WABA ID must be numeric"),
+  waba_id: z.string().regex(/^\d+$/, "Must be numeric"),
 
   template: z.object({
     name: z
       .string()
-      .regex(/^[a-z][a-z0-9_]*$/, "Name must be lowercase with underscores")
-      .max(512, "Name max 512 chars"),
+      .regex(/^[a-z][a-z0-9_]*$/, "lowercase_with_underscores")
+      .max(512),
 
     category: z.enum(["UTILITY", "MARKETING", "AUTHENTICATION"]),
 
@@ -94,14 +99,12 @@ const CreateTemplateInput = z.object({
               type: z.enum(["URL", "PHONE_NUMBER", "QUICK_REPLY"]),
               text: z.string(),
               url: z.string().optional(),
-              phone_number: z.string().optional(),
             }),
           )
           .optional(),
         example: z
           .object({
             body_text: z.array(z.array(z.string())).optional(),
-            header_text: z.array(z.string()).optional(),
           })
           .optional(),
       }),
@@ -110,47 +113,39 @@ const CreateTemplateInput = z.object({
 });
 ```
 
+**API Call:**
+
+```http
+POST https://graph.facebook.com/v21.0/{waba_id}/message_templates
+Authorization: Bearer {token from .env}
+```
+
 **Success Response:**
 
-```typescript
+```json
 {
-  success: true,
-  template_id: "123456789",
-  status: "PENDING" | "APPROVED" | "REJECTED",
-  message: "Template created successfully"
+  "success": true,
+  "template_id": "123456789",
+  "status": "PENDING",
+  "message": "Template created"
 }
 ```
 
-**Error Response (Validation):**
+**Validation Error:**
 
-```typescript
+```json
 {
-  success: false,
-  error: "VALIDATION_ERROR",
-  details: [
-    "template.name: Name must be lowercase with underscores",
-    "template.category: Expected UTILITY|MARKETING|AUTHENTICATION, got 'utility'"
-  ]
-}
-```
-
-**Error Response (Meta API):**
-
-```typescript
-{
-  success: false,
-  error: "META_API_ERROR",
-  code: 100,
-  message: "Template with this name already exists",
-  suggestion: "Use a different name or delete existing template first"
+  "success": false,
+  "error": "VALIDATION_ERROR",
+  "details": ["template.name: Must be lowercase_with_underscores"]
 }
 ```
 
 ---
 
-### Tool 2: `list_whatsapp_templates`
+### Tool 3: `list_whatsapp_templates`
 
-Lists all templates for a WABA.
+**Purpose:** List all templates from Meta (not our storage).
 
 **Input Schema:**
 
@@ -161,30 +156,31 @@ const ListTemplatesInput = z.object({
 });
 ```
 
+**API Call:**
+
+```http
+GET https://graph.facebook.com/v21.0/{waba_id}/message_templates
+Authorization: Bearer {token from .env}
+```
+
 **Response:**
 
-```typescript
+```json
 {
-  success: true,
-  templates: [
-    {
-      name: "otp_login_verification",
-      status: "APPROVED",
-      category: "AUTHENTICATION",
-      language: "en",
-      id: "123456789"
-    },
-    // ...
+  "success": true,
+  "templates": [
+    { "name": "otp_login", "status": "APPROVED", "id": "123" },
+    { "name": "booking", "status": "PENDING", "id": "456" }
   ],
-  total: 9
+  "total": 2
 }
 ```
 
 ---
 
-### Tool 3: `delete_whatsapp_template`
+### Tool 4: `delete_whatsapp_template`
 
-Deletes a template by name.
+**Purpose:** Delete ONE template from Meta.
 
 **Input Schema:**
 
@@ -195,11 +191,18 @@ const DeleteTemplateInput = z.object({
 });
 ```
 
+**API Call:**
+
+```http
+DELETE https://graph.facebook.com/v21.0/{waba_id}/message_templates?name={template_name}
+Authorization: Bearer {token from .env}
+```
+
 ---
 
-### Tool 4: `get_template_status`
+### Tool 5: `get_template_status`
 
-Gets detailed status of a specific template.
+**Purpose:** Get detailed status of ONE template from Meta.
 
 **Input Schema:**
 
@@ -212,94 +215,58 @@ const GetTemplateStatusInput = z.object({
 
 **Response:**
 
-```typescript
+```json
 {
-  success: true,
-  template: {
-    name: "proposal_rejected",
-    status: "REJECTED",
-    rejection_reason: "Template contains promotional content but marked as UTILITY",
-    suggested_fix: "Change category to MARKETING or remove promotional language"
+  "success": true,
+  "template": {
+    "name": "proposal_rejected",
+    "status": "REJECTED",
+    "rejection_reason": "URL in body without URL button",
+    "suggested_fix": "Add URL button or remove URL from body"
   }
 }
 ```
 
 ---
 
-## 6. Validation & Error Handling
+## 5. Tools Summary
 
-### 6.1 Why Zod Validation?
+| Tool                       | Purpose                | Queries            |
+| -------------------------- | ---------------------- | ------------------ |
+| `get_template_format`      | Learn format           | Static (hardcoded) |
+| `create_whatsapp_template` | Create 1 template      | POST to Meta       |
+| `list_whatsapp_templates`  | List all templates     | GET from Meta      |
+| `delete_whatsapp_template` | Delete 1 template      | DELETE on Meta     |
+| `get_template_status`      | Get 1 template details | GET from Meta      |
 
-When AI sends incorrect format:
-
-```
-AI calls: create_whatsapp_template({
-  waba_id: "practice_stacks",  // ❌ Should be numeric
-  template: {
-    name: "OTP-Login",         // ❌ Should be lowercase+underscore
-    category: "utility",       // ❌ Should be uppercase
-  }
-})
-
-MCP returns clear errors:
-{
-  success: false,
-  error: "VALIDATION_ERROR",
-  details: [
-    "waba_id: Must be numeric string, got 'practice_stacks'",
-    "template.name: Must match /^[a-z][a-z0-9_]*$/, got 'OTP-Login'",
-    "template.category: Must be UTILITY|MARKETING|AUTHENTICATION, got 'utility'"
-  ]
-}
-
-AI reads errors, fixes, and retries! ✅
-```
-
-### 6.2 Meta API Error Mapping
-
-| Meta Error Code | Friendly Message        | Suggested Fix                       |
-| --------------- | ----------------------- | ----------------------------------- |
-| 100             | Template already exists | Delete first or use different name  |
-| 190             | Invalid access token    | Regenerate token in Meta Developers |
-| 368             | Rate limited            | Wait 60 seconds and retry           |
-| 131000          | Invalid template format | Check body text and variables       |
+**All read/write operations go directly to Meta. We store nothing.**
 
 ---
 
-## 7. User Flow
-
-### One-Time Setup
-
-1. Add `WHATSAPP_ACCESS_TOKEN` to `.env`
-2. Configure MCP in Cursor settings
-3. Restart Cursor
-
-### Main Flow
+## 6. Project Structure
 
 ```
-Step 1: You say "Create templates for WABA ID: 278469610073775"
-Step 2: AI asks for template source (markdown file or inline)
-Step 3: You point to WHATSAPP_TEMPLATES_LIST.md
-Step 4: AI parses file, shows template list
-Step 5: You confirm "Create all"
-Step 6: AI calls MCP for each template
-Step 7: MCP validates with Zod, calls Meta API
-Step 8: Results returned to AI
-Step 9: AI shows success/failure table
-```
-
-### Switching Apps
-
-```
-You: "Now create for Abhyasika - WABA ID: 168563435816817"
-(Same token, different WABA ID)
+WhatsappMCP/
+├── src/
+│   ├── server.ts              # MCP entry point
+│   ├── tools/
+│   │   ├── get-format.ts      # get_template_format
+│   │   ├── create.ts          # create_whatsapp_template
+│   │   ├── list.ts            # list_whatsapp_templates
+│   │   ├── delete.ts          # delete_whatsapp_template
+│   │   └── status.ts          # get_template_status
+│   ├── schemas/
+│   │   └── template.ts        # Zod schemas
+│   └── lib/
+│       └── meta-api.ts        # Meta Graph API client
+├── .env                       # WHATSAPP_ACCESS_TOKEN
+├── package.json
+└── tsconfig.json
 ```
 
 ---
 
-## 8. Technical Stack
-
-### Dependencies
+## 7. Dependencies
 
 ```json
 {
@@ -310,49 +277,71 @@ You: "Now create for Abhyasika - WABA ID: 168563435816817"
 }
 ```
 
-### Environment Variables
+---
+
+## 8. Environment Variables
 
 ```bash
 # .env (never commit!)
 WHATSAPP_ACCESS_TOKEN=EAAGm0PX4ZCps...
 ```
 
-Token must have permission: `whatsapp_business_management`
+Required permission: `whatsapp_business_management`
 
 ---
 
-## 9. Template Definitions Source
+## 9. Error Handling
 
-Templates can come from:
+### Zod Validation Errors
 
-1. **Markdown file** (like `WHATSAPP_TEMPLATES_LIST.md`)
-2. **Inline in conversation** (AI builds template object)
-3. **TypeScript config** (for frequently used templates)
+When AI sends wrong format, MCP returns clear errors:
 
-AI parses the source and extracts template data to pass to MCP tools.
+```json
+{
+  "success": false,
+  "error": "VALIDATION_ERROR",
+  "details": ["template.name: Must be lowercase"]
+}
+```
+
+AI reads errors, fixes, and retries.
+
+### Meta API Errors
+
+| Code   | Meaning         | Suggested Fix                 |
+| ------ | --------------- | ----------------------------- |
+| 100    | Template exists | Delete first or rename        |
+| 190    | Invalid token   | Regenerate in Meta Developers |
+| 368    | Rate limited    | Wait 60s and retry            |
+| 131000 | Invalid format  | Check body/variables          |
 
 ---
 
-## 10. Implementation Steps
+## 10. Multi-App Support
 
-1. [ ] Initialize project with dependencies
-2. [ ] Create Zod schemas for validation
-3. [ ] Implement Meta API client
-4. [ ] Implement `create_whatsapp_template` tool
-5. [ ] Implement `list_whatsapp_templates` tool
-6. [ ] Implement `delete_whatsapp_template` tool
-7. [ ] Implement `get_template_status` tool
-8. [ ] Add MCP server entry point
-9. [ ] Test with single template
-10. [ ] Test with batch creation
-11. [ ] Document and configure in Cursor
+```
+One Business (Novibyte Innovations) → One Access Token
+├── Practice Stacks    → WABA: 278469610073775
+├── Abhyasika          → WABA: 168563435816817
+├── Sparsh Glow        → WABA: xxxxxxxxxx
+└── Test Account       → WABA: xxxxxxxxxx
+
+User provides WABA ID per request.
+Token shared across all apps.
+```
 
 ---
 
-## 11. Success Criteria
+## 11. Implementation Checklist
 
-- [ ] AI can create templates without user touching Meta Dashboard
-- [ ] Validation errors help AI self-correct
-- [ ] Works across multiple WABA accounts with one command
-- [ ] Token never exposed in conversation
-- [ ] 9 templates created in under 60 seconds
+- [ ] Initialize project with dependencies
+- [ ] Create Zod schemas
+- [ ] Implement `get_template_format`
+- [ ] Implement `create_whatsapp_template`
+- [ ] Implement `list_whatsapp_templates`
+- [ ] Implement `delete_whatsapp_template`
+- [ ] Implement `get_template_status`
+- [ ] Add Meta API client
+- [ ] Add MCP server entry point
+- [ ] Test single template creation
+- [ ] Configure in Cursor
