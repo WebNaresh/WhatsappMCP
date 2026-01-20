@@ -243,6 +243,49 @@ const GetTemplateStatusInput = z.object({
 
 ---
 
+### Tool 6: `list_connected_wabas`
+
+**Purpose:** List all WhatsApp Business Accounts (WABAs) accessible by the current access token.
+
+**Input Schema:**
+
+```typescript
+const ListWabasInput = z.object({
+  limit: z.number().optional().default(25),
+});
+```
+
+**API Calls:**
+
+1. Get System User ID:
+
+   ```http
+   GET https://graph.facebook.com/v21.0/me
+   Authorization: Bearer {token}
+   ```
+
+   Response: `{ "id": "12345", "name": "System User" }`
+
+2. Get WABAs:
+   ```http
+   GET https://graph.facebook.com/v21.0/{user_id}/assigned_whatsapp_business_accounts
+   Authorization: Bearer {token}
+   ```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "wabas": [
+    { "id": "278469...", "name": "Practice Stacks", "currency": "INR" },
+    { "id": "168563...", "name": "Abhyasika", "currency": "INR" }
+  ]
+}
+```
+
+---
+
 ## 6. Project Structure
 
 ```
