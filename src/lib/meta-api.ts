@@ -37,6 +37,23 @@ interface ListTemplatesResponse {
     };
 }
 
+interface WabaInfo {
+    id: string;
+    name: string;
+    currency: string;
+    timezone_id: string;
+    message_template_namespace: string;
+}
+
+interface MeResponse {
+    id: string;
+    name: string;
+}
+
+interface AssignedWabasResponse {
+    data: WabaInfo[];
+}
+
 function getAccessToken(): string {
     const token = process.env.WHATSAPP_ACCESS_TOKEN;
     if (!token) {
@@ -174,4 +191,42 @@ export async function getTemplateByName(
 ): Promise<TemplateInfo | null> {
     const templates = await listTemplates(wabaId);
     return templates.find((t) => t.name === templateName) || null;
+}
+
+export async function getMe(): Promise<MeResponse> {
+    const token = getAccessToken();
+
+    try {
+        const response = await axios.get<MeResponse>(`${GRAPH_API_BASE}/me`, {
+            headers: {
+                Authorization: `Bearer ${token}`,
+            },
+        });
+
+        return response.data;
+    } catch (error) {
+        handleMetaError(error);
+    }
+}
+
+export async function getAssignedWabas(userId: string): Promise<WabaInfo[]> {
+    const token = getAccessToken();
+
+    try {
+        const response = await axios.get<AssignedWabasResponse>(
+            `${GRAPH_API_BASE}/${userId}/assigned_whatsapp_business_accounts`,
+            {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+                params: {
+                    fields: "id,name,currency,timezone_id,message_template_namespace",
+                },
+            },
+        );
+
+        return response.data.data;
+    } catch (error) {
+        handleMetaError(error);
+    }
 }
