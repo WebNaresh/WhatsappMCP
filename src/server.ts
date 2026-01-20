@@ -9,6 +9,7 @@ import { createWhatsappTemplate } from "./tools/create.js";
 import { listWhatsappTemplates } from "./tools/list.js";
 import { deleteWhatsappTemplate } from "./tools/delete.js";
 import { getTemplateStatus } from "./tools/status.js";
+import { listConnectedWabas } from "./tools/list-wabas.js";
 
 // Create MCP server
 const server = new McpServer({
@@ -144,6 +145,28 @@ server.registerTool(
     },
     async (input) => {
         const result = await getTemplateStatus(input);
+        return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+    },
+);
+
+// Tool 6: list_connected_wabas
+server.registerTool(
+    "list_connected_wabas",
+    {
+        title: "List Connected WhatsApp Accounts",
+        description:
+            "List all WhatsApp Business Accounts (WABAs) accessible by the current access token. Use this to find your WABA IDs.",
+        inputSchema: {
+            limit: z
+                .number()
+                .optional()
+                .describe("Max number of accounts to return (default 25)"),
+        },
+    },
+    async (input) => {
+        const result = await listConnectedWabas(input);
         return {
             content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
